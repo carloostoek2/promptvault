@@ -13,7 +13,7 @@ const pool = new Pool({
 
 // Create table if it doesn't exist
 async function initDB() {
-  // Agregar columna image si no existe (para backward compatibility)
+  // Crear tabla si no existe
   await pool.query(`
     CREATE TABLE IF NOT EXISTS prompts (
       id          TEXT PRIMARY KEY,
@@ -26,16 +26,28 @@ async function initDB() {
       confidence  REAL    DEFAULT 0.5,
       attributes  JSONB   DEFAULT '{}',
       favorite    BOOLEAN DEFAULT FALSE,
-      image       TEXT    DEFAULT NULL,
+      image       TEXT,
       created     TIMESTAMPTZ DEFAULT NOW(),
       updated     TIMESTAMPTZ DEFAULT NOW(),
       usage_count INTEGER DEFAULT 0
     )
   `);
+
+  // Agregar columna image si no existe (para tablas existentes)
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'prompts' AND column_name = 'image') THEN
+        ALTER TABLE prompts ADD COLUMN image TEXT;
+      END IF;
+    END $$
+  `);
+
   console.log('✅ DB ready');
 }
 
-app.use(express.json());
+// Aumentar límite para imágenes base64 (4MB)
+app.use(express.json({ limit: '4mb' }));
 
 // Serve the frontend from /public
 app.use(express.static(path.join(__dirname, 'public')));
