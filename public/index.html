@@ -936,7 +936,7 @@ Remember: Return ONLY JSON, no other text.`;
             }`;
 
             document.getElementById('view-tags').innerHTML = (prompt.tags || []).map(tag =>
-                `<span class="px-2 py-1 rounded-md bg-dark-700 text-gray-400 text-xs">#${escapeHtml(tag)}</span>`
+                `<span onclick="filterByTag('${escapeHtml(tag)}'); closeViewModal();" class="cursor-pointer px-2 py-1 rounded-md bg-dark-700 text-gray-400 text-xs hover:bg-dark-600 hover:text-gray-300 transition-colors">#${escapeHtml(tag)}</span>`
             ).join('');
 
             document.getElementById('view-content').textContent = prompt.content;
@@ -1172,7 +1172,7 @@ Remember: Return ONLY JSON, no other text.`;
                             <p class="prompt-text text-sm text-gray-500 font-mono">${escapeHtml(prompt.content)}</p>
                             ${(prompt.tags || []).length ? `
                                 <div class="flex flex-wrap gap-1.5 mt-3">
-                                    ${prompt.tags.slice(0, 4).map(tag => `<span class="px-2 py-0.5 rounded-md bg-dark-700 text-gray-400 text-xs">#${escapeHtml(tag)}</span>`).join('')}
+                                    ${prompt.tags.slice(0, 4).map(tag => `<span onclick="filterByTag('${escapeHtml(tag)}')" class="cursor-pointer px-2 py-0.5 rounded-md bg-dark-700 text-gray-400 text-xs hover:bg-dark-600 hover:text-gray-300 transition-colors">#${escapeHtml(tag)}</span>`).join('')}
                                     ${prompt.tags.length > 4 ? `<span class="text-xs text-gray-500">+${prompt.tags.length - 4}</span>` : ''}
                                 </div>
                             ` : ''}
