@@ -256,6 +256,18 @@
                     <p class="text-xs text-gray-500 text-center mt-2">Extrae título, categoría, tags y más automáticamente</p>
                 </div>
 
+                <!-- Retry Button (shown when analysis fails) -->
+                <div id="retry-section" class="hidden">
+                    <button type="button" onclick="retryExtractWithAI()"
+                        class="w-full py-3 rounded-xl bg-dark-700 border border-dark-600 text-accent-cyan font-medium flex items-center justify-center gap-2 hover:bg-dark-600 transition-all">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        Reintentar análisis
+                    </button>
+                    <p class="text-xs text-gray-500 text-center mt-2">El análisis falló. ¿Quieres intentar de nuevo?</p>
+                </div>
+
                 <!-- Processing State -->
                 <div id="ai-processing" class="hidden">
                     <div class="flex items-center justify-center gap-3 py-4">
@@ -717,6 +729,8 @@ Remember: Return ONLY JSON, no other text.`;
                 // Auto-save after successful analysis
                 await autoSavePrompt(content, extractedMetadata);
                 showToast('Prompt analizado y guardado automáticamente');
+                document.getElementById('ai-extract-section').classList.remove('hidden');
+                document.getElementById('retry-section').classList.add('hidden');
 
             } catch (error) {
                 console.error('AI Error:', error);
@@ -724,10 +738,18 @@ Remember: Return ONLY JSON, no other text.`;
                 document.getElementById('metadata-section').classList.remove('hidden');
                 document.getElementById('save-btn').disabled = false;
                 document.getElementById('save-btn').classList.remove('opacity-50', 'cursor-not-allowed');
+                document.getElementById('ai-extract-section').classList.add('hidden');
+                document.getElementById('retry-section').classList.remove('hidden');
                 updateSubtypeOptions();
             } finally {
                 document.getElementById('ai-processing').classList.add('hidden');
             }
+        }
+
+        async function retryExtractWithAI() {
+            document.getElementById('retry-section').classList.add('hidden');
+            document.getElementById('ai-extract-section').classList.remove('hidden');
+            await extractWithAI();
         }
 
         async function autoSavePrompt(content, metadata) {
@@ -1020,10 +1042,16 @@ Remember: Return ONLY JSON, no other text.`;
                 resetImageUpload();
             }
 
-            document.getElementById('ai-extract-section').classList.add('hidden');
+            document.getElementById('ai-extract-section').classList.remove('hidden');
+            document.getElementById('retry-section').classList.add('hidden');
             document.getElementById('metadata-section').classList.remove('hidden');
             document.getElementById('save-btn').disabled = false;
             document.getElementById('save-btn').classList.remove('opacity-50', 'cursor-not-allowed');
+
+            // Habilitar el botón de AI extract
+            const aiBtn = document.getElementById('ai-extract-btn');
+            aiBtn.disabled = false;
+            aiBtn.classList.remove('opacity-50', 'cursor-not-allowed');
 
             document.getElementById('confidence-badge').textContent = `${Math.round((p.confidence || 0) * 100)}% confianza`;
             document.getElementById('prompt-modal').classList.remove('hidden');
@@ -1059,6 +1087,7 @@ Remember: Return ONLY JSON, no other text.`;
             document.getElementById('prompt-id').value = '';
             document.getElementById('modal-title').textContent = 'Nuevo Prompt';
             document.getElementById('ai-extract-section').classList.remove('hidden');
+            document.getElementById('retry-section').classList.add('hidden');
             document.getElementById('ai-processing').classList.add('hidden');
             document.getElementById('metadata-section').classList.add('hidden');
             document.getElementById('save-btn').disabled = false;
@@ -1074,6 +1103,8 @@ Remember: Return ONLY JSON, no other text.`;
         function closeModal() {
             document.getElementById('prompt-modal').classList.add('hidden');
             extractedMetadata = null;
+            document.getElementById('ai-extract-section').classList.remove('hidden');
+            document.getElementById('retry-section').classList.add('hidden');
             resetImageUpload();
         }
 
