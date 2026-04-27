@@ -172,6 +172,20 @@
         <!-- Prompts List -->
         <main class="px-4 py-4" id="prompts-container"></main>
 
+        <!-- Loading More Indicator -->
+        <div id="loading-more" class="hidden flex justify-center py-4">
+            <div class="flex items-center gap-2 text-gray-400 text-sm">
+                <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <span>Cargando más...</span>
+            </div>
+        </div>
+
+        <!-- Infinite Scroll Sentinel -->
+        <div id="scroll-sentinel" class="h-1"></div>
+
         <!-- Empty State -->
         <div id="empty-state" class="hidden flex flex-col items-center justify-center px-8 py-16 text-center">
             <div class="w-20 h-20 rounded-2xl bg-dark-800 flex items-center justify-center mb-4 relative overflow-hidden">
@@ -368,10 +382,11 @@
         <div class="absolute inset-0 bg-black/90 backdrop-blur-sm" onclick="closeViewModal()"></div>
         <div class="absolute inset-x-4 top-20 bottom-24 bg-dark-900 rounded-3xl overflow-hidden flex flex-col animate-fade-in">
 
-        <!-- Handle visual para swipe -->
+        <!-- Handle visual para swipe + dots indicadores -->
         <div class="flex justify-center pt-3 pb-1 cursor-grab">
             <div class="w-10 h-1 rounded-full bg-dark-600"></div>
         </div>
+        <div id="prompt-dots" class="flex justify-center gap-1.5 py-2"></div>
 
             <div class="flex items-center justify-between px-4 py-4 border-b border-dark-700">
                 <div class="flex items-center gap-2">
@@ -510,6 +525,13 @@
         let currentViewPrompt = null;
         let extractedMetadata = null;
         let currentImage = null; // Imagen actual en base64
+        let hasMore = true;
+        let currentOffset = 0;
+        let isLoadingMore = false;
+        const PAGE_SIZE = 20;
+        let scrollObserver = null;
+        let currentPromptIndex = -1;
+        let currentFilteredPrompts = [];
 
         // Settings stay in localStorage (device-specific, never sent to server)
         const CONFIG = {
@@ -562,7 +584,18 @@
         // ─── Storage → API ────────────────────────────────────────────────────────────
         async function loadPrompts() {
             try {
-                prompts = await apiGet('/api/prompts');
+                const data = await apiGet('/api/prompts');
+                // Handle new paginated response
+                if (data.prompts) {
+                    prompts = data.prompts;
+                    hasMore = data.pagination.hasMore;
+                    currentOffset = data.pagination.offset + data.pagination.limit;
+                } else {
+                    // Backward compatibility: old response was just an array
+                    prompts = data;
+                    hasMore = false;
+                    currentOffset = prompts.length;
+                }
                 // tags may come as parsed arrays from pg JSONB — normalize just in case
                 prompts = prompts.map(p => ({
                     ...p,
@@ -572,8 +605,46 @@
             } catch (e) {
                 console.error('Error cargando prompts:', e);
                 prompts = [];
+                hasMore = false;
                 showToast('Error conectando con el servidor');
             }
+        }
+
+        async function loadMorePrompts() {
+            if (isLoadingMore || !hasMore) return;
+            isLoadingMore = true;
+            showLoadingMore();
+            try {
+                const data = await apiGet(`/api/prompts?limit=${PAGE_SIZE}&offset=${currentOffset}`);
+                if (data.prompts) {
+                    const newPrompts = data.prompts.map(p => ({
+                        ...p,
+                        tags: Array.isArray(p.tags) ? p.tags : [],
+                        attributes: p.attributes || {}
+                    }));
+                    prompts = [...prompts, ...newPrompts];
+                    hasMore = data.pagination.hasMore;
+                    currentOffset = data.pagination.offset + data.pagination.limit;
+                }
+                renderPrompts();
+                updateStats();
+            } catch (e) {
+                console.error('Error cargando más prompts:', e);
+                showToast('Error al cargar más prompts');
+            } finally {
+                isLoadingMore = false;
+                hideLoadingMore();
+            }
+        }
+
+        function showLoadingMore() {
+            const el = document.getElementById('loading-more');
+            if (el) el.classList.remove('hidden');
+        }
+
+        function hideLoadingMore() {
+            const el = document.getElementById('loading-more');
+            if (el) el.classList.add('hidden');
         }
 
         // ─── Initialize ───────────────────────────────────────────────────────────────
@@ -940,6 +1011,25 @@ Remember: Return ONLY JSON, no other text.`;
             const prompt = prompts.find(p => p.id === id);
             if (!prompt) return;
             currentViewPrompt = prompt;
+
+            // Calculate filtered list (same as renderPrompts)
+            let filtered = prompts.filter(p => {
+                if (currentFilter.category === 'favorites' && !p.favorite) return false;
+                if (currentFilter.category !== 'all' && currentFilter.category !== 'favorites' && p.type !== currentFilter.category) return false;
+                if (currentFilter.subcategory && p.subtype !== currentFilter.subcategory) return false;
+                if (currentFilter.tag && !(p.tags || []).includes(currentFilter.tag)) return false;
+                if (currentFilter.search) {
+                    const s = currentFilter.search.toLowerCase();
+                    return p.title.toLowerCase().includes(s) ||
+                           p.content.toLowerCase().includes(s) ||
+                           (p.tags || []).some(t => t.toLowerCase().includes(s));
+                }
+                return true;
+            });
+            filtered.sort((a, b) => new Date(b.created) - new Date(a.created));
+            currentFilteredPrompts = filtered;
+            currentPromptIndex = filtered.findIndex(p => p.id === id);
+
             const cfg = CATEGORY_CONFIG[prompt.type] || CATEGORY_CONFIG.uncategorized;
 
             document.getElementById('view-type').textContent  = cfg.label;
@@ -983,6 +1073,53 @@ Remember: Return ONLY JSON, no other text.`;
             }
 
             document.getElementById('view-modal').classList.remove('hidden');
+            updatePromptDots();
+        }
+
+        function updatePromptDots() {
+            const dotsContainer = document.getElementById('prompt-dots');
+            if (!dotsContainer || currentFilteredPrompts.length <= 1) {
+                dotsContainer.classList.add('hidden');
+                return;
+            }
+            dotsContainer.classList.remove('hidden');
+            const maxDots = 7;
+            let dots = [];
+            if (currentFilteredPrompts.length <= maxDots) {
+                // Show all dots
+                dots = currentFilteredPrompts.map((_, i) => i);
+            } else {
+                // Show limited dots with ellipsis
+                if (currentPromptIndex < maxDots - 3) {
+                    // Near the beginning
+                    dots = [0, 1, 2, 3, 4, '...', currentFilteredPrompts.length - 1];
+                } else if (currentPromptIndex > currentFilteredPrompts.length - 4) {
+                    // Near the end
+                    dots = [0, '...', currentFilteredPrompts.length - 4, currentFilteredPrompts.length - 3, currentFilteredPrompts.length - 2, currentFilteredPrompts.length - 1];
+                } else {
+                    // In the middle
+                    dots = [0, '...', currentPromptIndex - 1, currentPromptIndex, currentPromptIndex + 1, '...', currentFilteredPrompts.length - 1];
+                }
+            }
+            dotsContainer.innerHTML = dots.map(d => {
+                if (d === '...') {
+                    return '<span class="text-gray-500 text-xs">...</span>';
+                }
+                const isActive = d === currentPromptIndex;
+                return `<span class="w-1.5 h-1.5 rounded-full transition-colors ${isActive ? 'bg-accent-cyan' : 'bg-dark-600'}"></span>`;
+            }).join('');
+        }
+
+        function navigateToNextPrompt() {
+            if (currentPromptIndex < currentFilteredPrompts.length - 1) {
+                viewPrompt(currentFilteredPrompts[currentPromptIndex + 1].id);
+            }
+        }
+
+        function navigateToPrevPrompt() {
+            if (currentPromptIndex > 0) {
+                viewPrompt(currentFilteredPrompts[currentPromptIndex - 1].id);
+            }
         }
 
         function closeViewModal() {
@@ -1216,6 +1353,9 @@ Remember: Return ONLY JSON, no other text.`;
                     </div>
                 `;
             }).join('');
+
+            // Setup infinite scroll observer
+            setupInfiniteScroll();
         }
 
         function updateStats() {
@@ -1223,6 +1363,24 @@ Remember: Return ONLY JSON, no other text.`;
             const favText  = favCount > 0 ? ` · ${favCount} ❤️` : '';
             document.getElementById('prompt-count').textContent =
                 `${prompts.length} prompt${prompts.length !== 1 ? 's' : ''} guardado${prompts.length !== 1 ? 's' : ''}${favText}`;
+        }
+
+        // ─── Infinite Scroll ───────────────────────────────────────────────────────────
+        function setupInfiniteScroll() {
+            const sentinel = document.getElementById('scroll-sentinel');
+            if (!sentinel) return;
+
+            if (scrollObserver) {
+                scrollObserver.disconnect();
+            }
+
+            scrollObserver = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
+                    loadMorePrompts();
+                }
+            }, { rootMargin: '200px' });
+
+            scrollObserver.observe(sentinel);
         }
 
         // ─── Categories Modal ─────────────────────────────────────────────────────────
@@ -1382,19 +1540,28 @@ Remember: Return ONLY JSON, no other text.`;
         function initSwipeToClose() {
             const inner = document.querySelector('#view-modal .absolute.inset-x-4');
             const scrollArea = inner.querySelector('.overflow-y-auto');
-            let startY = 0, startTime = 0;
+            let startY = 0, startX = 0, startTime = 0;
 
             inner.addEventListener('touchstart', e => {
                 startY = e.touches[0].clientY;
+                startX = e.touches[0].clientX;
                 startTime = Date.now();
             }, { passive: true });
 
             inner.addEventListener('touchend', e => {
+                const deltaX = e.changedTouches[0].clientX - startX;
                 const deltaY = e.changedTouches[0].clientY - startY;
                 const velocity = Math.abs(deltaY) / (Date.now() - startTime); // px/ms
 
                 const atTop    = scrollArea.scrollTop <= 0;
                 const atBottom = scrollArea.scrollTop + scrollArea.clientHeight >= scrollArea.scrollHeight - 2;
+
+                // Horizontal swipe for navigation (>80px horizontal, <40px vertical)
+                if (Math.abs(deltaX) > 80 && Math.abs(deltaY) < 40) {
+                    if (deltaX < 0) navigateToNextPrompt();  // swipe left = next
+                    else navigateToPrevPrompt();           // swipe right = prev
+                    return;
+                }
 
                 const fastSwipe = velocity > 0.4 && Math.abs(deltaY) > 50;
                 const bigSwipe  = Math.abs(deltaY) > 130;

@@ -54,11 +54,26 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── API ROUTES ───────────────────────────────────────────────────────────────
 
-// GET all prompts
+// GET all prompts (with pagination)
 app.get('/api/prompts', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+  const offset = parseInt(req.query.offset) || 0;
+
   try {
-    const result = await pool.query('SELECT * FROM prompts ORDER BY created DESC');
-    res.json(result.rows);
+    const [result, countResult] = await Promise.all([
+      pool.query('SELECT * FROM prompts ORDER BY created DESC LIMIT $1 OFFSET $2', [limit, offset]),
+      pool.query('SELECT COUNT(*) FROM prompts')
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.json({
+      prompts: result.rows,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + result.rows.length < total
+      }
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
