@@ -500,6 +500,18 @@ app.get('/api/workflows/prompt/:promptId', async (req, res) => {
   }
 });
 
+// POST log AI parse error → console.error for Railway
+app.post('/api/logs/ai-error', (req, res) => {
+  const { aiResponse, provider, model, promptLength, error } = req.body;
+  console.error('🤖 AI PARSE ERROR');
+  console.error('Provider:', provider);
+  console.error('Model:', model);
+  console.error('Prompt length:', promptLength);
+  console.error('Error:', error);
+  console.error('AI Response:', aiResponse);
+  res.json({ logged: true });
+});
+
 // Fallback: serve index.html for any non-API route
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

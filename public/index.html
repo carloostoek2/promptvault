@@ -1432,6 +1432,18 @@ PROMPT TO ANALYZE:
                     const cleaned = aiResponse.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
                     parsed = JSON.parse(cleaned);
                 } catch (e) {
+                    // Log to server for Railway console
+                    fetch('/api/logs/ai-error', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            aiResponse,
+                            provider: CONFIG.provider,
+                            model: CONFIG.model,
+                            promptLength: content.length,
+                            error: e.message
+                        })
+                    }).catch(() => {});
                     throw new Error('No se pudo parsear la respuesta de la IA');
                 }
 
