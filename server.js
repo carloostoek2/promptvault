@@ -207,6 +207,52 @@ app.get('/api/prompts/suggest', async (req, res) => {
   }
 });
 
+// GET search prompts — server-side full-text search with pagination
+app.get('/api/prompts/search', async (req, res) => {
+  const { q, limit = 20, offset = 0 } = req.query;
+  const searchQuery = (q || '').trim();
+
+  if (!searchQuery || searchQuery.length < 2) {
+    return res.json({
+      prompts: [],
+      pagination: { total: 0, limit: parseInt(limit), offset: parseInt(offset), hasMore: false }
+    });
+  }
+
+  const likePattern = `%${searchQuery}%`;
+
+  try {
+    const [result, countResult] = await Promise.all([
+      pool.query(
+        `SELECT * FROM prompts
+         WHERE title ILIKE $1 OR content ILIKE $1 OR tags::text ILIKE $1
+         ORDER BY created DESC
+         LIMIT $2 OFFSET $3`,
+        [likePattern, parseInt(limit), parseInt(offset)]
+      ),
+      pool.query(
+        `SELECT COUNT(*) FROM prompts
+         WHERE title ILIKE $1 OR content ILIKE $1 OR tags::text ILIKE $1`,
+        [likePattern]
+      )
+    ]);
+
+    const total = parseInt(countResult.rows[0].count);
+    res.json({
+      prompts: result.rows,
+      pagination: {
+        total,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        hasMore: parseInt(offset) + result.rows.length < total
+      }
+    });
+  } catch (err) {
+    console.error('Search error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST bulk import — must be BEFORE /:id routes
 app.post('/api/prompts/bulk', async (req, res) => {
   const { prompts, merge } = req.body;

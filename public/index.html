@@ -775,6 +775,9 @@
         let isLoadingMore = false;
         const PAGE_SIZE = 20;
         let scrollObserver = null;
+        let isSearchMode = false;
+        let searchQuery = '';
+        let searchDebounceTimer = null;
         let currentPromptIndex = -1;
         let currentFilteredPrompts = [];
         let workflows = [];
@@ -864,7 +867,10 @@
             isLoadingMore = true;
             showLoadingMore();
             try {
-                const data = await apiGet(`/api/prompts?limit=${PAGE_SIZE}&offset=${currentOffset}`);
+                const endpoint = isSearchMode
+                    ? `/api/prompts/search?q=${encodeURIComponent(searchQuery)}&limit=${PAGE_SIZE}&offset=${currentOffset}`
+                    : `/api/prompts?limit=${PAGE_SIZE}&offset=${currentOffset}`;
+                const data = await apiGet(endpoint);
                 if (data.prompts) {
                     const newPrompts = data.prompts.map(p => ({
                         ...p,
@@ -1730,12 +1736,6 @@ PROMPT TO ANALYZE:
                     const attr = p.attributes?.image?.intention;
                     if (attr !== currentFilter.intention) return false;
                 }
-                if (currentFilter.search) {
-                    const s = currentFilter.search.toLowerCase();
-                    return p.title.toLowerCase().includes(s) ||
-                           p.content.toLowerCase().includes(s) ||
-                           (p.tags || []).some(t => t.toLowerCase().includes(s));
-                }
                 return true;
             });
             filtered.sort((a, b) => new Date(b.created) - new Date(a.created));
@@ -2010,6 +2010,8 @@ PROMPT TO ANALYZE:
             currentFilter.intention = null;
             currentFilter.search = '';
             document.getElementById('search-input').value = '';
+            isSearchMode = false;
+            searchQuery = '';
             document.getElementById('filter-angle').value = '';
             document.getElementById('filter-timeofday').value = '';
             document.getElementById('filter-location').value = '';
@@ -2055,53 +2057,84 @@ PROMPT TO ANALYZE:
         let searchTimeout;
         let currentSuggestions = [];
 
+        async function performServerSearch(q) {
+            searchQuery = q;
+            isSearchMode = true;
+            currentOffset = 0;
+            hasMore = true;
+            try {
+                const data = await apiGet(`/api/prompts/search?q=${encodeURIComponent(q)}&limit=${PAGE_SIZE}&offset=0`);
+                prompts = data.prompts.map(p => ({
+                    ...p,
+                    tags: Array.isArray(p.tags) ? p.tags : [],
+                    attributes: p.attributes || {}
+                }));
+                hasMore = data.pagination.hasMore;
+                currentOffset = data.pagination.limit;
+                renderPrompts();
+                updateStats();
+            } catch (e) {
+                console.error('Search error:', e);
+            }
+        }
+
+        async function exitSearchMode() {
+            isSearchMode = false;
+            searchQuery = '';
+            currentOffset = 0;
+            hasMore = true;
+            await loadPrompts();
+            renderPrompts();
+            updateStats();
+        }
+
         function handleSearch(value) {
             clearTimeout(searchTimeout);
             const dropdown = document.getElementById('suggestions-dropdown');
             const list = document.getElementById('suggestions-list');
+            const trimmed = value.trim();
 
-            if (value.trim().length < 2) {
+            // Siempre actualizar currentFilter.search para consistencia con otros filtros
+            currentFilter.search = trimmed;
+
+            if (trimmed.length < 2) {
                 dropdown.classList.add('hidden');
                 currentFilter.search = '';
-                applyFiltersAndRender();
+                exitSearchMode();
                 return;
             }
 
-            currentFilter.search = value;
+            // Ocultar dropdown mientras se cargan resultados
             dropdown.classList.add('hidden');
 
             searchTimeout = setTimeout(async () => {
+                // Server-side search → reemplaza la lista principal
+                await performServerSearch(trimmed);
+
+                // Sugerencias inteligentes (aparecen encima como quick-access)
                 try {
-                    const resp = await fetch(`/api/prompts/suggest?q=${encodeURIComponent(value)}&limit=4`);
+                    const resp = await fetch(`/api/prompts/suggest?q=${encodeURIComponent(trimmed)}&limit=4`);
                     const data = await resp.json();
                     currentSuggestions = data.suggestions || [];
 
-                    if (currentSuggestions.length === 0) {
-                        dropdown.classList.add('hidden');
-                        applyFiltersAndRender();
-                        return;
-                    }
-
-                    list.innerHTML = currentSuggestions.map(s => `
-                        <div onclick="selectSuggestion('${s.id}')" class="flex items-center gap-3 px-4 py-3 hover:bg-dark-700 cursor-pointer border-b border-dark-700 last:border-0 transition-colors">
-                            <div class="flex-1 min-w-0">
-                                <div class="flex items-center gap-2">
-                                    <span class="text-sm font-medium text-gray-200 truncate">${s.title || 'Sin título'}</span>
-                                    ${s.intention ? `<span class="px-1.5 py-0.5 rounded text-xs ${getIntentionColor(s.intention)}">${s.intention}</span>` : ''}
+                    if (currentSuggestions.length > 0) {
+                        list.innerHTML = currentSuggestions.map(s => `
+                            <div onclick="selectSuggestion('${s.id}')" class="flex items-center gap-3 px-4 py-3 hover:bg-dark-700 cursor-pointer border-b border-dark-700 last:border-0 transition-colors">
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-sm font-medium text-gray-200 truncate">${s.title || 'Sin título'}</span>
+                                        ${s.intention ? `<span class="px-1.5 py-0.5 rounded text-xs ${getIntentionColor(s.intention)}">${s.intention}</span>` : ''}
+                                    </div>
+                                    ${s.description ? `<p class="text-xs text-gray-500 truncate mt-0.5">${s.description}</p>` : ''}
                                 </div>
-                                ${s.description ? `<p class="text-xs text-gray-500 truncate mt-0.5">${s.description}</p>` : ''}
+                                <span class="text-xs text-gray-600">${s.reason === 'intention_match' ? '🧠' : '📝'}</span>
                             </div>
-                            <span class="text-xs text-gray-600">${s.reason === 'intention_match' ? '🧠' : '📝'}</span>
-                        </div>
-                    `).join('');
-
-                    document.getElementById('suggestions-footer').classList.remove('hidden');
-                    dropdown.classList.remove('hidden');
-                    applyFiltersAndRender();
+                        `).join('');
+                        document.getElementById('suggestions-footer').classList.remove('hidden');
+                        dropdown.classList.remove('hidden');
+                    }
                 } catch (err) {
                     console.error('Suggestions error:', err);
-                    dropdown.classList.add('hidden');
-                    applyFiltersAndRender();
                 }
             }, 300);
         }
@@ -2215,12 +2248,6 @@ PROMPT TO ANALYZE:
                 if (currentFilter.intention) {
                     const attr = p.attributes?.image?.intention;
                     if (attr !== currentFilter.intention) return false;
-                }
-                if (currentFilter.search) {
-                    const s = currentFilter.search.toLowerCase();
-                    return p.title.toLowerCase().includes(s) ||
-                           p.content.toLowerCase().includes(s) ||
-                           (p.tags || []).some(t => t.toLowerCase().includes(s));
                 }
                 return true;
             });
